@@ -29,3 +29,42 @@
   
   As três extensões são ortogonais e combináveis: PolKA pode transportar payloads IP com ECN habilitado, e o AQM CoDel atua em todas as portas TX, incluindo tráfego PolKA. O repositório inclui o helper. Python polka_switch.py (classe PolkaSwitch para Mininet) e cinco topologias de referência — de um switch isolado até o cenário máximo PolKA + L4S + AccECN + CoDel em topologia dumbbell. A matriz de configuração cobre 4 modos de switch × 4 codepoints ECN × 4 modos TCP × 6 topologias, totalizando 384 combinações documentadas, com 17 cenários representativos detalhados.
 
+
+## Pré-requisitos e Build
+
+### Dependências
+
+```bash
+sudo apt-get install -y \
+  build-essential autoconf automake libtool \
+  libssl-dev libcap-ng-dev python3-dev \
+  python3-six python3-sphinx \
+  linux-headers-$(uname -r)
+```
+
+### Compilar e instalar OVS
+
+```bash
+cd ovs/
+./boot.sh
+./configure --prefix=/usr --localstatedir=/var --sysconfdir=/etc
+make -j$(nproc)
+sudo make install
+sudo make modules_install   # módulo de kernel (datapath)
+sudo depmod -a
+```
+
+### Iniciar o OVS
+
+```bash
+sudo /usr/share/openvswitch/scripts/ovs-ctl start
+ovs-vsctl --version   # verificar versão
+```
+
+### Instalar Mininet
+
+```bash
+git clone https://github.com/mininet/mininet
+cd mininet
+sudo util/install.sh -n   # só Mininet, sem OVS nativo
+```
