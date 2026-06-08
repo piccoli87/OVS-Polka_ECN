@@ -1,0 +1,14 @@
+\.am$
+\.m4$
+\.mk$
+\.png$
+\.sln$
+^include/linux/
+^include/sparse/rte_
+^lib/sflow
+^third-party/
+^debian/README.Debian$
+^debian/copyright.in$
+^debian/openvswitch-switch.init$
+^debian/openvswitch-switch.postinst$
+^debian/rules$
