@@ -1,4 +1,4 @@
-# OVS-Polka_ECN
+# OpenVSwitch com suporte ECN e POLKA
 
  ---
   ## Open vSwitch Estendido — ECN/AccECN, AQM CoDel e PolKA
