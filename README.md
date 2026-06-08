@@ -50,7 +50,6 @@ cd ovs/
 ./configure --prefix=/usr --localstatedir=/var --sysconfdir=/etc
 make -j$(nproc)
 sudo make install
-sudo make modules_install   # módulo de kernel (datapath)
 sudo depmod -a
 ```
 
