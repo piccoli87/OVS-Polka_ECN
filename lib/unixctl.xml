@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<dl>
+  <dt><code>--unixctl=<var>socket</var></code></dt>
+  <dd>
+    Sets the name of the control socket on which
+    <code><var>program</var></code> listens for runtime management commands
+    (see <var>RUNTIME MANAGEMENT COMMANDS,</var> below).  If <var>socket</var>
+    does not begin with <code>/</code>, it is interpreted as relative to
+    <code>@RUNDIR@</code>. If <code>--unixctl</code> is not used at all,
+    the default socket is
+    <code>@RUNDIR@/<var>program</var>.</code><var>pid</var><code>.ctl</code>,
+    where <var>pid</var> is <code><var>program</var></code>'s process ID.
+  <p>
+    Specifying <code>none</code> for <var>socket</var> disables the control
+    socket feature.
+  </p>
+  </dd>
+</dl>
