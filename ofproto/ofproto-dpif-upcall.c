@@ -1407,18 +1407,24 @@ should_install_flow(struct udpif *udpif, struct upcall *upcall)
     }
 
     /* PolKA (ethertype 0x1234) is stateless source routing: the output port
-     * is computed via CRC16(routeId, node_poly) for EVERY packet.
+     * is computed via CRC16(routeId, node_poly) per packet.
      *
-     * CANNOT cache a megaflow: the ODP key serialization
-     * (odp_flow_key_from_flow__/from_mask) does not include flow->regs
-     * for unknown ethertypes.  The installed DPCLS entry would therefore
-     * have key {in_port, dl_type=0x1234} — matching ALL PolKA packets on
-     * that port regardless of routeId — and route them all to the first
-     * path's output port.  Every packet must go through the slow path so
-     * that xlate_polka() reads the routeId directly from the raw packet
-     * and computes the correct next-hop. */
+     * Netdev (userspace) datapath: ODP serialization now includes the 20-byte
+     * routeId as OVS_KEY_ATTR_POLKA_ROUTE_ID (flow->regs[0..4]), so DPCLS
+     * can cache a correct per-routeId megaflow.  Allow installation.
+     *
+     * Kernel datapath: the openvswitch.ko module does not parse ETH_TYPE_POLKA
+     * frames and has no OVS_KEY_ATTR_POLKA_ROUTE_ID in its key space.  Any
+     * megaflow installed would match ALL PolKA packets on that port and
+     * forward them to the wrong next-hop.  Block installation so every packet
+     * reaches the slow path where xlate_polka() reads the routeId from the
+     * raw packet and computes the correct CRC16 next-hop. */
     if (upcall->flow->dl_type == htons(ETH_TYPE_POLKA)) {
-        return false;
+        const char *dp_type =
+            dpif_normalize_type(dpif_type(udpif->dpif));
+        if (strcmp(dp_type, "netdev") != 0) {
+            return false;
+        }
     }
 
     atomic_read_relaxed(&udpif->flow_limit, &flow_limit);

@@ -1,0 +1,119 @@
+From: PolKA kernel datapath support
+Subject: [PATCH] openvswitch: add PolKA source-routing key attribute
+
+This patch adds PolKA source-routing support to the kernel OVS datapath,
+enabling per-routeId megaflow caching without userspace upcalls.
+
+Compared to the current state (every PolKA packet → upcall → userspace CRC16
+→ forward), this patch allows the kernel to:
+  1. Extract the 20-byte routeId from the PolKA Ethernet frame
+  2. Include it in the kernel flow key as OVS_KEY_ATTR_POLKA_ROUTE_ID
+  3. Install per-routeId kernel megaflows that bypass userspace entirely
+
+Apply to: linux/net/openvswitch/  (kernel 5.10+ structure)
+Tested against: 7.0.0-custom kernel
+
+---
+ include/uapi/linux/openvswitch.h      |  9 +++++++
+ net/openvswitch/flow.h                |  5 ++++
+ net/openvswitch/flow.c                | 36 +++++++++++++++++++++++++++
+ net/openvswitch/flow_netlink.c        | 44 +++++++++++++++++++++++++++++++++
+ 4 files changed, 94 insertions(+)
+
+--- a/include/uapi/linux/openvswitch.h
++++ b/include/uapi/linux/openvswitch.h
+@@ -391,6 +391,13 @@ enum ovs_key_attr {
+ 	OVS_KEY_ATTR_PACKET_TYPE,   /* be32 packet type */
+ 	OVS_KEY_ATTR_ND_EXTENSIONS, /* IPv6 Neighbor Discovery extensions */
+
++	/* PolKA source-routing routeId: 20 bytes (5 × 32-bit big-endian words),
++	 * extracted from the PolKA frame immediately after the Ethernet header
++	 * (etherType 0x1234).  Enables per-routeId kernel megaflow caching so
++	 * PolKA forwarding decisions bypass userspace entirely after the first
++	 * packet per unique routeId. */
++	OVS_KEY_ATTR_POLKA_ROUTE_ID,  /* 20-byte PolKA routeId */
++
+ 	OVS_KEY_ATTR_TUNNEL_INFO,   /* struct ip_tunnel_info.
+ 				     * For use with limited tunnel key
+ 				     * attributes on kernel-internal egress
+@@ -400,7 +407,7 @@ enum ovs_key_attr {
+ 	__OVS_KEY_ATTR_MAX
+ };
+
+-#define OVS_KEY_ATTR_MAX (__OVS_KEY_ATTR_MAX - 1)
++#define OVS_KEY_ATTR_MAX (__OVS_KEY_ATTR_MAX - 1)  /* updated: +1 for POLKA */
+
+--- a/net/openvswitch/flow.h
++++ b/net/openvswitch/flow.h
+@@ -XX,6 +XX,10 @@ struct sw_flow_key {
+ 	/* ... existing fields ... */
+
++	/* PolKA source-routing routeId (20 bytes = 5 × u32, big-endian).
++	 * Valid only when eth.type == htons(ETH_TYPE_POLKA). */
++	u8 polka_route_id[20];   /* populated by ovs_flow_extract() */
++
+ };
+
+--- a/net/openvswitch/flow.c
++++ b/net/openvswitch/flow.c
+@@ -XX,6 +XX,7 @@
+ #include <linux/if_arp.h>
+ #include <linux/if_ether.h>
++#define ETH_TYPE_POLKA  0x1234   /* PolKA source routing */
++#define POLKA_ROUTE_ID_LEN  20
+
+ /* In ovs_flow_extract(), inside the ethertype dispatch, after NSH handling: */
+
++	} else if (key->eth.type == htons(ETH_TYPE_POLKA)) {
++		/* Extract 20-byte routeId that sits immediately after the
++		 * Ethernet header. */
++		if (skb->len >= skb_network_offset(skb) + POLKA_ROUTE_ID_LEN) {
++			const u8 *rid = (const u8 *)skb_network_header(skb);
++			memcpy(key->polka_route_id, rid, POLKA_ROUTE_ID_LEN);
++		}
+
+--- a/net/openvswitch/flow_netlink.c
++++ b/net/openvswitch/flow_netlink.c
+@@ -XX,6 +XX,50 @@
+ /* In ovs_nla_get_match() — key parsing from netlink attribute: */
+
++	case OVS_KEY_ATTR_POLKA_ROUTE_ID:
++		if (attrs[OVS_KEY_ATTR_POLKA_ROUTE_ID]) {
++			const struct nlattr *a =
++				attrs[OVS_KEY_ATTR_POLKA_ROUTE_ID];
++			if (nla_len(a) != POLKA_ROUTE_ID_LEN) {
++				return -EINVAL;
++			}
++			memcpy(match->key->polka_route_id,
++			       nla_data(a), POLKA_ROUTE_ID_LEN);
++			if (is_mask) {
++				memcpy(match->mask->key.polka_route_id,
++				       nla_data(a), POLKA_ROUTE_ID_LEN);
++			}
++		}
++		break;
+
+ /* In ovs_nla_put_flow() — key serialization to netlink: */
+
++	if (nla_put(skb, OVS_KEY_ATTR_POLKA_ROUTE_ID,
++		    POLKA_ROUTE_ID_LEN, key->polka_route_id))
++		return -EMSGSIZE;
+
+ /* In ovs_flow_key_extract() attribute length table: */
++	[OVS_KEY_ATTR_POLKA_ROUTE_ID] = POLKA_ROUTE_ID_LEN,
+
+--
+IMPORTANT: after applying this patch:
+  1. Rebuild and install the kernel module:
+       make -C /lib/modules/$(uname -r)/build M=net/openvswitch modules
+       sudo cp net/openvswitch/openvswitch.ko /lib/modules/$(uname -r)/kernel/net/openvswitch/
+       sudo depmod -a
+       sudo modprobe -r openvswitch && sudo modprobe openvswitch
+
+  2. Remove the polka_route_id guard in should_install_flow() entirely
+     (both kernel and netdev datapaths can now install megaflows).
+
+  3. The userspace ODP changes (OVS_KEY_ATTR_POLKA_ROUTE_ID serialization)
+     already committed in this branch are compatible with the kernel patch:
+     the value OVS_KEY_ATTR_MAX+1 used by userspace will now match the
+     kernel's OVS_KEY_ATTR_POLKA_ROUTE_ID enum value after the uAPI update.

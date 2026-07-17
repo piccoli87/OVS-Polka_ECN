@@ -151,6 +151,10 @@ static struct odp_support dp_netdev_support = {
     .ct_state_nat = true,
     .ct_orig_tuple = true,
     .ct_orig_tuple6 = true,
+    /* Serialize PolKA routeId into ODP key so DPCLS can cache per-routeId
+     * megaflows.  Kernel datapath leaves this false (kernel module doesn't
+     * understand OVS_KEY_ATTR_POLKA_ROUTE_ID). */
+    .polka_route_id = true,
 };
 
 
@@ -4578,12 +4582,29 @@ dp_netdev_pmd_flush_output_on_port(struct dp_netdev_pmd_thread *pmd,
         int ifidx = netdev_get_ifindex(p->port->netdev);
         if (ifidx > 0) {
             uint32_t qlen = 0, drops = 0;
-            if (!tc_get_qdisc_stats(ifidx, &qlen, &drops)) {
+            int tc_err = tc_get_qdisc_stats(ifidx, &qlen, &drops);
+            if (!tc_err) {
                 queue_occ = qlen;
                 /* Pack buf_id (egress_ifid low 8 bits) + drops (24 bits). */
                 buf_occ = ((uint32_t)(egress_ifid & 0xffu) << 24)
                           | (drops & 0x00ffffffu);
+            } else {
+                /* DIAGNOSTIC (temporary): queue_occ/buf_occ were always
+                 * observed as 0 in INT-MD probes despite real tc backlog
+                 * confirmed externally via 'tc -s qdisc show'. This log
+                 * pinpoints whether the cause is here (netlink RTM_GETQDISC
+                 * failure) or at the ifidx lookup below. Remove once root
+                 * cause is confirmed and fixed. */
+                static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 5);
+                VLOG_WARN_RL(&rl, "INT: tc_get_qdisc_stats(ifidx=%d, port=%s) "
+                            "failed: %s", ifidx,
+                            netdev_get_name(p->port->netdev),
+                            ovs_strerror(tc_err));
             }
+        } else {
+            static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 5);
+            VLOG_WARN_RL(&rl, "INT: netdev_get_ifindex(port=%s) failed: "
+                        "ifidx=%d", netdev_get_name(p->port->netdev), ifidx);
         }
 
         struct dp_packet *int_pkt;

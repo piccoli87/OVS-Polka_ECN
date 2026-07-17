@@ -30,6 +30,12 @@
 #include "openflow/openflow.h"
 #include "util.h"
 
+/* Userspace-only ODP key attribute for PolKA source routing.
+ * Carries the 20-byte routeId (flow->regs[0..4] packed big-endian).
+ * Value is above OVS_KEY_ATTR_MAX so the kernel OVS module silently
+ * ignores it; it must never be sent via dpif-netlink. */
+#define OVS_KEY_ATTR_POLKA_ROUTE_ID  (OVS_KEY_ATTR_MAX + 1)
+
 struct ds;
 struct nlattr;
 struct ofpbuf;
@@ -207,7 +213,15 @@ int odp_flow_from_string(const char *s, const struct simap *port_names,
                                                                              \
     /* If true, it means that the datapath supports the IPv6 Neigh           \
      * Discovery Extension bits. */                                          \
-    ODP_SUPPORT_FIELD(bool, nd_ext, "IPv6 ND Extension")
+    ODP_SUPPORT_FIELD(bool, nd_ext, "IPv6 ND Extension")                    \
+                                                                             \
+    /* If true, serialize the 20-byte PolKA routeId (from flow->regs[0..4]) \
+     * into the ODP flow key as OVS_KEY_ATTR_POLKA_ROUTE_ID.  This is a     \
+     * userspace-only (netdev datapath) attribute: the kernel OVS module     \
+     * does not know about it and must never receive it.  When set, the      \
+     * DPCLS can cache a megaflow per routeId, turning per-packet upcalls    \
+     * into O(1) fast-path lookups. */                                       \
+    ODP_SUPPORT_FIELD(bool, polka_route_id, "PolKA routeId in key")
 
 /* Indicates support for various fields. This defines how flows will be
  * serialised. */

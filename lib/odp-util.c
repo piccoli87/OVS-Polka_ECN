@@ -198,6 +198,9 @@ ovs_key_attr_to_string(enum ovs_key_attr attr, char *namebuf, size_t bufsize)
     case OVS_KEY_ATTR_TUNNEL_INFO: return "<error: kernel-only tunnel_info>";
     case __OVS_KEY_ATTR_MAX:
     default:
+        if ((int)attr == OVS_KEY_ATTR_POLKA_ROUTE_ID) {
+            return "polka_route_id";
+        }
         snprintf(namebuf, bufsize, "key%u", (unsigned int) attr);
         return namebuf;
     }
@@ -6637,6 +6640,23 @@ odp_flow_key_from_flow__(const struct odp_flow_key_parms *parms,
         }
     } else if (flow->dl_type == htons(ETH_TYPE_NSH)) {
         nsh_key_to_attr(buf, &data->nsh, NULL, 0, export_mask);
+    } else if (flow->dl_type == htons(ETH_TYPE_POLKA)
+               && parms->support.polka_route_id) {
+        /* Serialize PolKA routeId (flow->regs[0..4], 5×32-bit big-endian)
+         * as a userspace-only ODP attribute.  The kernel datapath never
+         * receives this attribute (polka_route_id is false in kernel parms).
+         * On the netdev path this enables per-routeId DPCLS megaflows,
+         * eliminating the per-packet upcall overhead. */
+        uint8_t route_id[POLKA_ROUTE_ID_LEN];
+        for (int _i = 0; _i < 5; _i++) {
+            uint32_t _r = data->regs[_i];
+            route_id[_i * 4 + 0] = (_r >> 24) & 0xff;
+            route_id[_i * 4 + 1] = (_r >> 16) & 0xff;
+            route_id[_i * 4 + 2] = (_r >>  8) & 0xff;
+            route_id[_i * 4 + 3] =  _r        & 0xff;
+        }
+        nl_msg_put_unspec(buf, OVS_KEY_ATTR_POLKA_ROUTE_ID,
+                          route_id, POLKA_ROUTE_ID_LEN);
     }
 
     if (is_ip_any(flow) && !(flow->nw_frag & FLOW_NW_FRAG_LATER)) {
@@ -7602,8 +7622,30 @@ odp_flow_key_to_flow__(const struct nlattr *key, size_t key_len,
     /* For OVS to be backward compatible with newer datapath implementations,
      * we should ignore out of range attributes. */
     if (out_of_range_attr) {
-        VLOG_DBG("Flow key decode found unknown OVS_KEY_ATTR, %d",
-                 out_of_range_attr);
+        /* PolKA routeId: userspace-only attribute carrying the 20-byte
+         * routeId packed as 5 big-endian 32-bit words into flow->regs[0..4].
+         * Scan the raw nlattr buffer to recover the value. */
+        if (out_of_range_attr == OVS_KEY_ATTR_POLKA_ROUTE_ID) {
+            const struct nlattr *_nla;
+            size_t _left;
+            NL_ATTR_FOR_EACH (_nla, _left, key, key_len) {
+                if (nl_attr_type(_nla) == OVS_KEY_ATTR_POLKA_ROUTE_ID
+                    && nl_attr_get_size(_nla) == POLKA_ROUTE_ID_LEN) {
+                    const uint8_t *_rid = nl_attr_get(_nla);
+                    for (int _i = 0; _i < 5; _i++) {
+                        flow->regs[_i] =
+                            ((uint32_t)_rid[_i*4+0] << 24)
+                          | ((uint32_t)_rid[_i*4+1] << 16)
+                          | ((uint32_t)_rid[_i*4+2] <<  8)
+                          |  (uint32_t)_rid[_i*4+3];
+                    }
+                    break;
+                }
+            }
+        } else {
+            VLOG_DBG("Flow key decode found unknown OVS_KEY_ATTR, %d",
+                     out_of_range_attr);
+        }
         out_of_range_attr = 0;
     }
 
